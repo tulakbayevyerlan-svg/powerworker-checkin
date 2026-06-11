@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1a2e">
+<title>Powerworker — Учёт рабочего времени</title>
+<link rel="manifest" href="manifest.json">
+<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, getDocs, addDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyD1CSSIqFtHg6FBfit97-E9LwTI0B2N_2s",
+    authDomain: "powerworker-checkin.firebaseapp.com",
+    projectId: "powerworker-checkin",
+    storageBucket: "powerworker-checkin.firebasestorage.app",
+    messagingSenderId: "369848666436",
+    appId: "1:369848666436:web:16b4c301ff7f4295b9ef11"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  window._db = db;
+  window._fs = { collection, doc, setDoc, getDocs, addDoc, onSnapshot, query, orderBy };
+  window._dbReady = true;
+  window.dispatchEvent(new Event('db-ready'));
+</script>
+<style>
+  :root {
+    --orange: #F97316;
+    --orange-dark: #C2410C;
+    --bg: #0f0f1a;
+    --bg2: #1a1a2e;
+    --bg3: #16213e;
+    --surface: #1e1e35;
+    --surface2: #252545;
+    --text: #f1f5f9;
+    --text2: #94a3b8;
+    --text3: #64748b;
+    --green: #22c55e;
+    --green-bg: #052e16;
+    --red: #ef4444;
+    --red-bg: #2d0a0a;
+    --border: rgba(255,255,255,0.08);
+    --radius: 16px;
+    --radius-sm: 10px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { font-family: -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+  .screen { display: none; flex-direction: column; min-height: 100vh; }
+  .screen.active { display: flex; }
+
+  .header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .header-logo { display: flex; align-items: center; gap: 10px; }
+  .header-logo svg { color: var(--orange); }
+  .logo-text { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+  .logo-sub { font-size: 11px; color: var(--text3); margin-top: 1px; }
+  .time-badge { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text2); }
+
+  .sync-badge { font-size: 11px; padding: 4px 10px; border-radius: 20px; font-weight: 600; }
+  .sync-badge.online { background: rgba(34,197,94,0.15); color: var(--green); }
+  .sync-badge.offline { background: rgba(249,115,22,0.15); color: var(--orange); }
+
+  .home-content { flex: 1; display: flex; flex-direction: column; padding: 24px 20px; gap: 20px; }
+  .workers-header { display: flex; align-items: center; justify-content: space-between; }
+  .section-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text3); font-weight: 600; }
+  .badge-count { background: var(--orange); color: white; border-radius: 20px; padding: 2px 10px; font-size: 12px; font-weight: 700; }
+  .workers-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .worker-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; display: flex; align-items: center; gap: 14px; position: relative; overflow: hidden; }
+  .worker-card.checked-in { border-left: 3px solid var(--green); }
+  .worker-card.checked-out { border-left: 3px solid var(--text3); opacity: 0.75; }
+  .worker-avatar { width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 700; flex-shrink: 0; }
+  .worker-info { flex: 1; min-width: 0; }
+  .worker-name { font-size: 15px; font-weight: 600; }
+  .worker-role { font-size: 12px; color: var(--text3); margin-top: 2px; }
+  .worker-times { margin-top: 5px; display: flex; gap: 12px; }
+  .time-chip { font-size: 11px; display: flex; align-items: center; gap: 4px; color: var(--text2); }
+  .time-chip.in { color: var(--green); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .dot.green { background: var(--green); }
+  .dot.gray { background: var(--text3); }
+  .status-pill { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; flex-shrink: 0; }
+  .status-pill.on { background: var(--green-bg); color: var(--green); }
+  .status-pill.off { background: rgba(255,255,255,0.05); color: var(--text3); }
+  .status-pill.none { background: rgba(249,115,22,0.15); color: var(--orange); }
+
+  .scan-button-wrap { padding: 0 20px 30px; }
+  .scan-btn { width: 100%; background: var(--orange); color: white; border: none; border-radius: 18px; padding: 20px; font-size: 17px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 12px; transition: background 0.15s, transform 0.1s; }
+  .scan-btn:active { background: var(--orange-dark); transform: scale(0.98); }
+
+  .scan-content { flex: 1; display: flex; flex-direction: column; }
+  .camera-wrap { flex: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 360px; }
+  #video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+
+  .scan-instructions { background: var(--bg2); padding: 20px; text-align: center; }
+  .scan-instructions p { font-size: 14px; color: var(--text2); line-height: 1.5; }
+
+  .scan-result { background: var(--surface); margin: 12px 16px; border-radius: var(--radius); padding: 20px; display: none; align-items: center; gap: 16px; border: 1px solid var(--border); }
+  .scan-result.show { display: flex; }
+  .scan-result.success { border-color: var(--green); background: var(--green-bg); }
+  .scan-result.error { border-color: var(--red); background: var(--red-bg); }
+  .result-icon { font-size: 36px; flex-shrink: 0; }
+  .result-text { flex: 1; }
+  .result-name { font-size: 18px; font-weight: 700; }
+  .result-action { font-size: 13px; color: var(--text2); margin-top: 3px; }
+  .result-time { font-size: 13px; margin-top: 2px; font-weight: 600; }
+  .result-time.in-color { color: var(--green); }
+  .result-time.out-color { color: var(--orange); }
+
+  .scan-controls { padding: 16px; display: flex; gap: 10px; }
+  .btn-secondary { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 12px; padding: 14px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  .btn-secondary:active { background: var(--surface2); }
+
+  .admin-content { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+  .admin-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .admin-section-header { padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text2); display: flex; justify-content: space-between; align-items: center; }
+  .admin-worker-row { padding: 14px 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+  .admin-worker-row:last-child { border-bottom: none; }
+  .admin-worker-avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+  .admin-worker-info { flex: 1; }
+  .admin-worker-name { font-size: 14px; font-weight: 600; }
+  .admin-worker-role { font-size: 12px; color: var(--text3); }
+
+  .add-worker-form { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .form-input { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; color: var(--text); font-size: 14px; outline: none; transition: border-color 0.15s; width: 100%; }
+  .form-input:focus { border-color: var(--orange); }
+  .form-input::placeholder { color: var(--text3); }
+  select.form-input { cursor: pointer; }
+  option { background: var(--bg3); }
+
+  .btn-capture { background: var(--bg3); border: 2px dashed rgba(249,115,22,0.4); border-radius: 10px; padding: 20px; color: var(--orange); font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; }
+  .btn-capture.done { border-color: var(--green); color: var(--green); border-style: solid; }
+  .btn-primary { background: var(--orange); color: white; border: none; border-radius: 10px; padding: 14px; font-size: 14px; font-weight: 700; cursor: pointer; width: 100%; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .log-content { flex: 1; overflow-y: auto; }
+  .log-date-group { padding: 10px 20px 4px; }
+  .log-date-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+  .log-entry { margin: 0 16px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+  .log-entry-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  .log-entry-info { flex: 1; }
+  .log-entry-name { font-size: 14px; font-weight: 600; }
+  .log-entry-detail { font-size: 12px; color: var(--text3); margin-top: 1px; }
+  .log-entry-time { font-size: 13px; font-weight: 700; }
+  .log-entry-time.in { color: var(--green); }
+  .log-entry-time.out { color: var(--orange); }
+  .log-type-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; }
+  .log-type-badge.in { background: rgba(34,197,94,0.15); color: var(--green); }
+  .log-type-badge.out { background: rgba(249,115,22,0.15); color: var(--orange); }
+
+  .bottom-nav { background: var(--bg2); border-top: 1px solid var(--border); display: flex; padding-bottom: env(safe-area-inset-bottom, 0); flex-shrink: 0; }
+  .nav-btn { flex: 1; background: none; border: none; color: var(--text3); padding: 12px 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; transition: color 0.15s; }
+  .nav-btn.active { color: var(--orange); }
+
+  .loader-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 999; gap: 20px; }
+  .loader-overlay.hidden { display: none; }
+  .spinner { width: 48px; height: 48px; border: 3px solid var(--border); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loader-text { color: var(--text2); font-size: 14px; text-align: center; padding: 0 40px; }
+
+  .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 20px; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity 0.2s, transform 0.2s; z-index: 100; white-space: nowrap; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); width: 100%; max-width: 360px; overflow: hidden; }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); font-weight: 700; font-size: 16px; }
+  .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-video-wrap { position: relative; border-radius: 10px; overflow: hidden; background: #000; aspect-ratio: 4/3; }
+  .modal-video-wrap video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+  .photo-preview { width: 100%; border-radius: 10px; overflow: hidden; display: none; }
+  .photo-preview img { width: 100%; display: block; }
+  .photo-preview.show { display: block; }
+  .capture-hint { font-size: 13px; color: var(--text3); text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="loader-overlay" id="loader">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    <span style="font-size:20px;font-weight:800;color:#f1f5f9;">Powerworker</span>
+  </div>
+  <div class="spinner"></div>
+  <p class="loader-text" id="loader-text">Подключение к облаку и загрузка моделей...</p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="capture-modal">
+  <div class="modal">
+    <div class="modal-header">📸 Фото для распознавания</div>
+    <div class="modal-body">
+      <div class="modal-video-wrap" id="capture-video-wrap">
+        <video id="capture-video" autoplay muted playsinline></video>
+      </div>
+      <div class="photo-preview" id="photo-preview"><img id="preview-img" src="" alt="Превью"></div>
+      <p class="capture-hint" id="capture-hint">Расположите лицо в центре и нажмите «Снять»</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeCapture()" style="flex:1;">Отмена</button>
+      <button class="btn-primary" id="capture-action-btn" onclick="capturePhoto()" style="flex:2;">📷 Снять</button>
+    </div>
+  </div>
+</div>
+
+<!-- HOME -->
+<div class="screen active" id="screen-home">
+  <div class="header">
+    <div class="header-logo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <div><div class="logo-text">Powerworker</div><div class="logo-sub">Учёт рабочего времени</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="sync-badge offline" id="sync-badge">⏳ Sync</span>
+      <div class="time-badge" id="home-time">00:00</div>
+    </div>
+  </div>
+  <div class="home-content">
+    <div class="workers-header">
+      <span class="section-label">Рабочие сегодня</span>
+      <span class="badge-count" id="present-count">0</span>
+    </div>
+    <div class="workers-list" id="workers-list"></div>
+  </div>
+  <div class="scan-button-wrap">
+    <button class="scan-btn" onclick="goToScan()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      Сканировать лицо
+    </button>
+  </div>
+  <nav class="bottom-nav">
+    <button class="nav-btn active" onclick="showScreen('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Главная</button>
+    <button class="nav-btn" onclick="showScreen('log')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Журнал</button>
+    <button class="nav-btn" onclick="showScreen('admin')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>Рабочие</button>
+  </nav>
+</div>
+
+<!-- SCAN -->
+<div class="screen" id="screen-scan">
+  <div class="header">
+    <button class="btn-secondary" onclick="stopScan()" style="padding:8px 16px;font-size:13px;border-radius:8px;flex:0;">← Назад</button>
+    <div class="logo-text">Сканирование</div>
+    <div class="time-badge" id="scan-time">00:00</div>
+  </div>
+  <div class="scan-content">
+    <div class="camera-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay-canvas"></canvas>
+      <canvas id="face-oval-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></canvas>
+    </div>
+    <div class="scan-result" id="scan-result">
+      <div class="result-icon" id="result-icon">✅</div>
+      <div class="result-text">
+        <div class="result-name" id="result-name">—</div>
+        <div class="result-action" id="result-action">—</div>
+        <div class="result-time" id="result-time-el">—</div>
+      </div>
+    </div>
+    <div class="scan-instructions"><p id="scan-status">Подойдите к камере — распознавание начнётся автоматически</p></div>
+  </div>
+  <div class="scan-controls"><button class="btn-secondary" onclick="stopScan()">Закрыть камеру</button></div>
+</div>
+
+<!-- LOG -->
+<div class="screen" id="screen-log">
+  <div class="header">
+    <div class="header-logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <div class="logo-text">Журнал</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button onclick="exportCSV()" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">CSV ↓</button>
+      <div class="time-badge" id="log-time">00:00</div>
+    </div>
+  </div>
+  <div class="log-content" id="log-content"></div>
+  <nav class="bottom-nav">
+    <button class="nav-btn" onclick="showScreen('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Главная</button>
+    <button class="nav-btn active" onclick="showScreen('log')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Журнал</button>
+    <button class="nav-btn" onclick="showScreen('admin')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>Рабочие</button>
+  </nav>
+</div>
+
+<!-- ADMIN -->
+<div class="screen" id="screen-admin">
+  <div class="header">
+    <div class="header-logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
+      <div class="logo-text">Рабочие</div>
+    </div>
+    <div class="time-badge" id="admin-time">00:00</div>
+  </div>
+  <div class="admin-content">
+    <div class="admin-section">
+      <div class="admin-section-header"><span>Зарегистрированные</span><span id="admin-worker-count" style="color:var(--orange);"></span></div>
+      <div id="admin-workers-list"></div>
+    </div>
+    <div class="admin-section">
+      <div class="admin-section-header">Добавить рабочего</div>
+      <div class="add-worker-form">
+        <input class="form-input" type="text" id="new-name" placeholder="Имя и фамилия" autocomplete="off">
+        <select class="form-input" id="new-role">
+          <option value="">Специализация</option>
+          <option>Каменщик</option><option>Бетонщик</option><option>Арматурщик</option>
+          <option>Маляр</option><option>Сварщик</option><option>Электрик</option>
+          <option>Сантехник</option><option>Плотник</option><option>Разнорабочий</option><option>Прораб</option>
+        </select>
+        <div style="display:flex;gap:10px;">
+          <button class="btn-capture" id="capture-btn" onclick="openCapture()" style="flex:1;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            Селфи
+          </button>
+          <button class="btn-capture" id="upload-btn" onclick="openUpload()" style="flex:1;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Из галереи
+          </button>
+        </div>
+        <input type="file" id="photo-upload-input" accept="image/*" style="display:none;" onchange="handlePhotoUpload(event)">
+        <button class="btn-primary" id="add-worker-btn" onclick="addWorker()" disabled>Добавить рабочего</button>
+      </div>
+    </div>
+  </div>
+  <nav class="bottom-nav">
+    <button class="nav-btn" onclick="showScreen('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Главная</button>
+    <button class="nav-btn" onclick="showScreen('log')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Журнал</button>
+    <button class="nav-btn active" onclick="showScreen('admin')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>Рабочие</button>
+  </nav>
+</div>
+
+<script>
+const COLORS = ['#F97316','#22c55e','#3b82f6','#a855f7','#ec4899','#14b8a6','#f59e0b','#06b6d4'];
+let workers = [];
+let attendanceLog = [];
+let capturedDescriptor = null;
+let captureStream = null;
+let scanStream = null;
+let scanInterval = null;
+let lastScanTime = 0;
+let modelsLoaded = false;
+let dbReady = false;
+
+// Wait for both Firebase and face-api
+function checkReady() {
+  if (modelsLoaded && dbReady) {
+    document.getElementById('loader').classList.add('hidden');
+    document.getElementById('sync-badge').className = 'sync-badge online';
+    document.getElementById('sync-badge').textContent = '☁️ Онлайн';
+  }
+}
+
+window.addEventListener('db-ready', async () => {
+  dbReady = true;
+  const { collection, onSnapshot, query, orderBy } = window._fs;
+  const db = window._db;
+
+  // Live sync workers
+  onSnapshot(collection(db, 'workers'), snap => {
+    workers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderHome();
+    renderAdminWorkers();
+  });
+
+  // Live sync attendance
+  onSnapshot(query(collection(db, 'attendance'), orderBy('ts', 'asc')), snap => {
+    attendanceLog = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderHome();
+    renderLog();
+  });
+
+  checkReady();
+});
+
+window.addEventListener('load', async () => {
+  updateClock();
+  setInterval(updateClock, 1000);
+  try {
+    document.getElementById('loader-text').textContent = 'Загрузка модели распознавания лиц...';
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+    ]);
+    modelsLoaded = true;
+    checkReady();
+  } catch(e) {
+    document.getElementById('loader-text').textContent = 'Ошибка загрузки моделей. Проверьте интернет.';
+  }
+});
+
+function updateClock() {
+  const t = new Date().toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+  document.querySelectorAll('[id$="-time"]').forEach(el => el.textContent = t);
+}
+
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    if (b.getAttribute('onclick') === `showScreen('${name}')`) b.classList.add('active');
+    else b.classList.remove('active');
+  });
+}
+
+function goToScan() {
+  if (!modelsLoaded) { showToast('Модели ещё загружаются...'); return; }
+  if (!workers.length) { showToast('Сначала добавьте рабочих'); showScreen('admin'); return; }
+  if (!workers.some(w => w.descriptor)) { showToast('У рабочих нет фото'); return; }
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-scan').classList.add('active');
+  startScan();
+}
+
+function getWorkerToday(workerId) {
+  const today = todayStr();
+  return attendanceLog.filter(e => e.workerId === workerId && e.date === today);
+}
+
+function getWorkerStatus(workerId) {
+  const entries = getWorkerToday(workerId);
+  if (!entries.length) return 'none';
+  return entries[entries.length-1].type === 'in' ? 'in' : 'out';
+}
+
+function renderHome() {
+  const list = document.getElementById('workers-list');
+  const present = workers.filter(w => getWorkerStatus(w.id) === 'in').length;
+  document.getElementById('present-count').textContent = present;
+  if (!workers.length) {
+    list.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:14px;">Рабочие не добавлены.<br>Перейдите в раздел «Рабочие»</div>`;
+    return;
+  }
+  list.innerHTML = workers.map((w, i) => {
+    const status = getWorkerStatus(w.id);
+    const entries = getWorkerToday(w.id);
+    const inEntry = entries.find(e => e.type === 'in');
+    const outEntry = [...entries].reverse().find(e => e.type === 'out');
+    const initials = w.name.split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
+    const color = COLORS[i % COLORS.length];
+    const statusClass = status === 'in' ? 'checked-in' : status === 'out' ? 'checked-out' : '';
+    const pillClass = status === 'in' ? 'on' : status === 'out' ? 'off' : 'none';
+    const pillText = status === 'in' ? 'На объекте' : status === 'out' ? 'Ушёл' : 'Не отметился';
+    return `<div class="worker-card ${statusClass}">
+      <div class="worker-avatar" style="background:${color}22;color:${color};">${initials}</div>
+      <div class="worker-info">
+        <div class="worker-name">${w.name}</div>
+        <div class="worker-role">${w.role||'—'}</div>
+        <div class="worker-times">
+          ${inEntry?`<span class="time-chip in"><span class="dot green"></span>Пришёл ${inEntry.time}</span>`:''}
+          ${outEntry?`<span class="time-chip"><span class="dot gray"></span>Ушёл ${outEntry.time}</span>`:''}
+        </div>
+      </div>
+      <span class="status-pill ${pillClass}">${pillText}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderLog() {
+  const container = document.getElementById('log-content');
+  if (!attendanceLog.length) {
+    container.innerHTML = `<div style="text-align:center;padding:60px 20px;color:var(--text3);font-size:14px;">Записей пока нет</div>`;
+    return;
+  }
+  const grouped = {};
+  [...attendanceLog].reverse().forEach(e => {
+    if (!grouped[e.date]) grouped[e.date] = [];
+    grouped[e.date].push(e);
+  });
+  let html = '';
+  for (const [date, entries] of Object.entries(grouped)) {
+    const d = new Date(date);
+    const label = d.toLocaleDateString('ru-RU', {weekday:'long',day:'numeric',month:'long'});
+    html += `<div class="log-date-group"><div class="log-date-label">${label}</div></div>`;
+    entries.forEach(e => {
+      const w = workers.find(w => w.id === e.workerId);
+      if (!w) return;
+      const initials = w.name.split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
+      const color = COLORS[workers.indexOf(w) % COLORS.length];
+      html += `<div class="log-entry">
+        <div class="log-entry-avatar" style="background:${color}22;color:${color};">${initials}</div>
+        <div class="log-entry-info"><div class="log-entry-name">${w.name}</div><div class="log-entry-detail">${w.role||'—'}</div></div>
+        <span class="log-type-badge ${e.type}">${e.type==='in'?'ПРИХОД':'УХОД'}</span>
+        <div class="log-entry-time ${e.type}">${e.time}</div>
+      </div>`;
+    });
+  }
+  container.innerHTML = html;
+}
+
+function renderAdminWorkers() {
+  const list = document.getElementById('admin-workers-list');
+  document.getElementById('admin-worker-count').textContent = workers.length + ' чел.';
+  if (!workers.length) {
+    list.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Список пуст</div>`;
+    return;
+  }
+  list.innerHTML = workers.map((w, i) => {
+    const initials = w.name.split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
+    const color = COLORS[i % COLORS.length];
+    return `<div class="admin-worker-row">
+      <div class="admin-worker-avatar" style="background:${color}22;color:${color};">${initials}</div>
+      <div class="admin-worker-info">
+        <div class="admin-worker-name">${w.name}</div>
+        <div class="admin-worker-role">${w.role||'—'} · ${w.descriptor?'✅ Фото есть':'⚠️ Нет фото'}</div>
+      </div>
+      <button onclick="removeWorker('${w.id}')" style="background:none;border:none;color:var(--text3);cursor:pointer;padding:4px;font-size:16px;">✕</button>
+    </div>`;
+  }).join('');
+}
+
+
+function openUpload() {
+  document.getElementById('photo-upload-input').click();
+}
+
+async function handlePhotoUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    // Show in a simple way - reuse modal preview
+    document.getElementById('capture-modal').classList.add('show');
+    document.getElementById('capture-video-wrap').style.display = 'none';
+    document.getElementById('preview-img').src = dataUrl;
+    document.getElementById('photo-preview').classList.add('show');
+    document.getElementById('capture-hint').textContent = 'Обрабатываем лицо с фото...';
+    document.getElementById('capture-action-btn').style.display = 'none';
+    try {
+      const img = await faceapi.fetchImage(dataUrl);
+      let detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({inputSize: 416, scoreThreshold: 0.3})).withFaceLandmarks(true).withFaceDescriptor();
+      if (!detection) {
+        detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({inputSize: 608, scoreThreshold: 0.2})).withFaceLandmarks(true).withFaceDescriptor();
+      }
+      if (!detection) {
+        document.getElementById('capture-hint').textContent = '❌ Лицо не найдено на фото. Попробуйте другое фото.';
+        document.getElementById('capture-action-btn').style.display = '';
+        document.getElementById('capture-action-btn').textContent = '✕ Закрыть';
+        document.getElementById('capture-action-btn').onclick = closeCapture;
+        return;
+      }
+      capturedDescriptor = Array.from(detection.descriptor);
+      document.getElementById('capture-hint').textContent = '✅ Лицо успешно зарегистрировано!';
+      document.getElementById('capture-action-btn').style.display = '';
+      document.getElementById('capture-action-btn').textContent = '✓ Готово';
+      document.getElementById('capture-action-btn').onclick = closeCapture;
+      document.getElementById('upload-btn').classList.add('done');
+      document.getElementById('upload-btn').innerHTML = '✅ Фото загружено';
+      document.getElementById('capture-btn').classList.remove('done');
+      checkAddReady();
+    } catch(e) {
+      document.getElementById('capture-hint').textContent = 'Ошибка обработки фото.';
+    }
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+}
+function openCapture() {
+  document.getElementById('capture-modal').classList.add('show');
+  document.getElementById('photo-preview').classList.remove('show');
+  document.getElementById('capture-video-wrap').style.display = 'block';
+  document.getElementById('capture-hint').textContent = 'Расположите лицо в центре и нажмите «Снять»';
+  document.getElementById('capture-action-btn').textContent = '📷 Снять';
+  document.getElementById('capture-action-btn').onclick = capturePhoto;
+  capturedDescriptor = null;
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}}).then(stream => {
+    captureStream = stream;
+    document.getElementById('capture-video').srcObject = stream;
+  }).catch(() => showToast('Нет доступа к камере'));
+}
+
+function closeCapture() {
+  if (captureStream) { captureStream.getTracks().forEach(t=>t.stop()); captureStream = null; }
+  document.getElementById('capture-modal').classList.remove('show');
+}
+
+async function capturePhoto() {
+  const video = document.getElementById('capture-video');
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(-1,1);
+  ctx.drawImage(video, -canvas.width, 0);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+  document.getElementById('preview-img').src = dataUrl;
+  document.getElementById('photo-preview').classList.add('show');
+  document.getElementById('capture-video-wrap').style.display = 'none';
+  document.getElementById('capture-hint').textContent = 'Обрабатываем лицо...';
+  try {
+    const img = await faceapi.fetchImage(dataUrl);
+    const detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor();
+    if (!detection) {
+      document.getElementById('capture-hint').textContent = '❌ Лицо не найдено. Попробуйте снова.';
+      document.getElementById('capture-video-wrap').style.display = 'block';
+      document.getElementById('photo-preview').classList.remove('show');
+      return;
+    }
+    capturedDescriptor = Array.from(detection.descriptor);
+    document.getElementById('capture-hint').textContent = '✅ Лицо успешно зарегистрировано!';
+    document.getElementById('capture-action-btn').textContent = '✓ Готово';
+    document.getElementById('capture-action-btn').onclick = closeCapture;
+    document.getElementById('capture-btn').classList.add('done');
+    document.getElementById('capture-btn').innerHTML = '✅ Фото сделано';
+    checkAddReady();
+  } catch(e) {
+    document.getElementById('capture-hint').textContent = 'Ошибка. Попробуйте ещё раз.';
+  }
+}
+
+function checkAddReady() {
+  const name = document.getElementById('new-name').value.trim();
+  const role = document.getElementById('new-role').value;
+  document.getElementById('add-worker-btn').disabled = !(name && role && capturedDescriptor);
+}
+
+document.getElementById('new-name').addEventListener('input', checkAddReady);
+document.getElementById('new-role').addEventListener('change', checkAddReady);
+
+async function addWorker() {
+  const name = document.getElementById('new-name').value.trim();
+  const role = document.getElementById('new-role').value;
+  if (!name || !role || !capturedDescriptor) return;
+  const { collection, addDoc } = window._fs;
+  const db = window._db;
+  try {
+    await addDoc(collection(db, 'workers'), { name, role, descriptor: capturedDescriptor, addedAt: new Date().toISOString() });
+    document.getElementById('new-name').value = '';
+    document.getElementById('new-role').value = '';
+    document.getElementById('capture-btn').classList.remove('done');
+    document.getElementById('capture-btn').innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>Селфи`;
+    document.getElementById('upload-btn').classList.remove('done');
+    document.getElementById('upload-btn').innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Из галереи`;
+    document.getElementById('add-worker-btn').disabled = true;
+    capturedDescriptor = null;
+    showToast(`✅ ${name} добавлен в облако`);
+  } catch(e) { showToast('Ошибка сохранения'); }
+}
+
+async function removeWorker(id) {
+  const { doc } = window._fs;
+  const { deleteDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+  const db = window._db;
+  await deleteDoc(doc(db, 'workers', id));
+  showToast('Рабочий удалён');
+}
+
+async function startScan() {
+  document.getElementById('scan-result').className = 'scan-result';
+  document.getElementById('scan-status').textContent = 'Подойдите к камере — распознавание начнётся автоматически';
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}}});
+    const video = document.getElementById('video');
+    video.srcObject = scanStream;
+    await video.play();
+    const canvas = document.getElementById('overlay-canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+
+    // Face mesh visualization
+    const ovalCanvas = document.getElementById('face-oval-canvas');
+    const oc = ovalCanvas.getContext('2d');
+
+    function resizeOvalCanvas() {
+      ovalCanvas.width = ovalCanvas.offsetWidth;
+      ovalCanvas.height = ovalCanvas.offsetHeight;
+    }
+    resizeOvalCanvas();
+    window.addEventListener('resize', resizeOvalCanvas);
+
+    // Draw idle guide oval
+    function drawGuideOval(color) {
+      resizeOvalCanvas();
+      const w = ovalCanvas.width, h = ovalCanvas.height;
+      const cx = w/2, cy = h/2;
+      const rx = w*0.27, ry = h*0.37;
+      oc.clearRect(0,0,w,h);
+      oc.fillStyle = 'rgba(0,0,0,0.45)';
+      oc.fillRect(0,0,w,h);
+      oc.save();
+      oc.globalCompositeOperation = 'destination-out';
+      oc.beginPath();
+      oc.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+      oc.fill();
+      oc.restore();
+      oc.beginPath();
+      oc.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+      oc.strokeStyle = color;
+      oc.lineWidth = 2.5;
+      oc.stroke();
+      // 4 tick marks
+      [[0,ry],[rx,0],[0,-ry],[-rx,0]].forEach(([dx,dy]) => {
+        oc.beginPath();
+        oc.arc(cx+dx, cy+dy, 4, 0, Math.PI*2);
+        oc.fillStyle = color;
+        oc.fill();
+      });
+    }
+
+    // Draw face mesh landmarks
+    function drawFaceMesh(detection, matchColor) {
+      resizeOvalCanvas();
+      const w = ovalCanvas.width, h = ovalCanvas.height;
+      const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+      const scaleX = w / vw, scaleY = h / vh;
+      oc.clearRect(0,0,w,h);
+
+      const pts = detection.landmarks.positions;
+      // Scale points (mirror because video is mirrored)
+      const sp = pts.map(p => ({ x: w - p.x * scaleX, y: p.y * scaleY }));
+
+      // Face mesh triangle connections (68-point model)
+      const triangles = [
+        // jaw outline
+        [0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[6,7],[7,8],[8,9],[9,10],[10,11],[11,12],[12,13],[13,14],[14,15],[15,16],
+        // left eyebrow
+        [17,18],[18,19],[19,20],[20,21],
+        // right eyebrow
+        [22,23],[23,24],[24,25],[25,26],
+        // nose bridge
+        [27,28],[28,29],[29,30],
+        // nose base
+        [30,31],[31,32],[32,33],[33,34],[34,35],
+        // left eye
+        [36,37],[37,38],[38,39],[39,40],[40,41],[41,36],
+        // right eye
+        [42,43],[43,44],[44,45],[45,46],[46,47],[47,42],
+        // outer mouth
+        [48,49],[49,50],[50,51],[51,52],[52,53],[53,54],[54,55],[55,56],[56,57],[57,58],[58,59],[59,48],
+        // inner mouth
+        [60,61],[61,62],[62,63],[63,64],[64,65],[65,66],[66,67],[67,60],
+        // forehead cross
+        [17,0],[26,16],[19,27],[24,27],[21,22],
+        // cheek mesh
+        [0,17],[16,26],[1,36],[15,45],[2,31],[14,35],[3,32],[13,34],[4,48],[12,54],[5,59],[11,55],
+        [36,31],[45,35],[31,48],[35,54],[27,21],[27,22],[30,33],[8,57],[7,58],[9,56]
+      ];
+
+      oc.strokeStyle = matchColor === 'green' ? 'rgba(34,197,94,0.75)' : 'rgba(249,115,22,0.75)';
+      oc.lineWidth = 1;
+      triangles.forEach(([a,b]) => {
+        if (!sp[a] || !sp[b]) return;
+        oc.beginPath();
+        oc.moveTo(sp[a].x, sp[a].y);
+        oc.lineTo(sp[b].x, sp[b].y);
+        oc.stroke();
+      });
+
+      // Landmark dots
+      sp.forEach((p, i) => {
+        const isKey = [0,8,16,27,30,36,39,42,45,48,54].includes(i);
+        oc.beginPath();
+        oc.arc(p.x, p.y, isKey ? 2.5 : 1.5, 0, Math.PI*2);
+        oc.fillStyle = matchColor === 'green' ? 'rgba(34,197,94,0.9)' : 'rgba(249,115,22,0.9)';
+        oc.fill();
+      });
+    }
+
+    drawGuideOval('rgba(249,115,22,0.85)');
+    window.drawGuideOval = drawGuideOval;
+    window.drawFaceMesh = drawFaceMesh;
+
+    const labeled = workers.filter(w=>w.descriptor).map(w =>
+      new faceapi.LabeledFaceDescriptors(w.id, [new Float32Array(w.descriptor)])
+    );
+    if (!labeled.length) { document.getElementById('scan-status').textContent = 'Нет фото рабочих'; return; }
+    const matcher = new faceapi.FaceMatcher(labeled, 0.6);
+
+    scanInterval = setInterval(async () => {
+      if (Date.now() - lastScanTime < 2500) return;
+      const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({inputSize:416, scoreThreshold:0.3})).withFaceLandmarks(true).withFaceDescriptors();
+      if (!detections.length) {
+        document.getElementById('scan-status').textContent = 'Встаньте ближе и смотрите прямо';
+        drawGuideOval('rgba(249,115,22,0.85)');
+        return;
+      }
+      // Show mesh while matching
+      drawFaceMesh(detections[0], 'orange');
+      document.getElementById('scan-status').textContent = 'Распознаём...';
+      for (const d of detections) {
+        const match = matcher.findBestMatch(d.descriptor);
+        if (match.label !== 'unknown') {
+          lastScanTime = Date.now();
+          drawFaceMesh(d, 'green');
+          const worker = workers.find(w => w.id === match.label);
+          if (worker) await handleCheckInOut(worker);
+          return;
+        }
+      }
+      drawFaceMesh(detections[0], 'orange');
+      document.getElementById('scan-status').textContent = 'Лицо не распознано — попробуйте ещё раз';
+    }, 600);
+  } catch(e) { document.getElementById('scan-status').textContent = 'Ошибка доступа к камере'; }
+}
+
+function stopScan() {
+  clearInterval(scanInterval);
+  if (scanStream) { scanStream.getTracks().forEach(t=>t.stop()); scanStream = null; }
+  showScreen('home');
+}
+
+async function handleCheckInOut(worker) {
+  const status = getWorkerStatus(worker.id);
+  const type = status === 'in' ? 'out' : 'in';
+  const now = new Date();
+  const time = now.toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+  const { collection, addDoc } = window._fs;
+  const db = window._db;
+  await addDoc(collection(db, 'attendance'), { workerId: worker.id, type, date: todayStr(), time, ts: now.toISOString() });
+
+  document.getElementById('result-icon').textContent = type === 'in' ? '✅' : '👋';
+  document.getElementById('result-name').textContent = worker.name;
+  document.getElementById('result-action').textContent = type === 'in' ? `${worker.role} — ПРИХОД` : `${worker.role} — УХОД`;
+  const timeEl = document.getElementById('result-time-el');
+  timeEl.textContent = time;
+  timeEl.className = 'result-time ' + (type === 'in' ? 'in-color' : 'out-color');
+
+  document.getElementById('scan-result').className = 'scan-result show ' + (type === 'in' ? 'success' : 'error');
+  document.getElementById('scan-status').textContent = type === 'in' ? 'Хорошего рабочего дня! Возврат через 3 сек...' : 'До свидания! Возврат через 3 сек...';
+  clearInterval(scanInterval);
+  setTimeout(() => { stopScan(); }, 3000);
+}
+
+function exportCSV() {
+  if (!attendanceLog.length) { showToast('Нет данных'); return; }
+  const header = 'Дата,Время,Имя,Специализация,Тип\n';
+  const rows = attendanceLog.map(e => {
+    const w = workers.find(w => w.id === e.workerId);
+    return `${e.date},${e.time},"${w?w.name:'Удалён'}","${w?w.role:'—'}",${e.type==='in'?'Приход':'Уход'}`;
+  }).join('\n');
+  const blob = new Blob(['\uFEFF'+header+rows], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `powerworker_${todayStr()}.csv`;
+  a.click();
+  showToast('CSV скачан');
+}
+
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+function showToast(msg, dur=2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+</script>
+</body>
+</html>
