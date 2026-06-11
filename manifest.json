@@ -1,0 +1,17 @@
+{
+  "name": "СтройЧек — Учёт рабочего времени",
+  "short_name": "СтройЧек",
+  "description": "Система учёта прихода и ухода строителей по распознаванию лица",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f1a",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='32' fill='%231a1a2e'/><path d='M40 100l56-44 56 44v60a12 12 0 01-12 12H52a12 12 0 01-12-12z' fill='none' stroke='%23F97316' stroke-width='12' stroke-linejoin='round'/><path d='M76 172v-44h40v44' fill='none' stroke='%23F97316' stroke-width='12' stroke-linejoin='round'/></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
